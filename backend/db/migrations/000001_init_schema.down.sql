@@ -1,0 +1,11 @@
+-- 000001_init_schema.down.sql
+-- Parishram AI Database Schema Rollback
+
+DROP TABLE IF EXISTS support_drafts CASCADE;
+DROP TABLE IF EXISTS audit_logs CASCADE;
+DROP TABLE IF EXISTS payment_events CASCADE;
+DROP TABLE IF EXISTS payments CASCADE;
+DROP TABLE IF EXISTS purchases CASCADE;
+DROP TABLE IF EXISTS expenses CASCADE;
+DROP TABLE IF EXISTS budgets CASCADE;
+DROP TABLE IF EXISTS users CASCADE;

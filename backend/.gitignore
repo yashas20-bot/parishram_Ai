@@ -1,0 +1,21 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Environment and secrets
+.env
+*.local.env
+
+# Go test / coverage
+*.out
+*.test
+coverage.txt
+
+# IDEs
+.idea/
+.vscode/
+*.swp

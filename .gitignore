@@ -1,0 +1,23 @@
+# Parishram AI root .gitignore
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Dependencies
+node_modules/
+.expo/
+dist/
+web-build/
+
+# Go build artifacts
+backend/bin/
+*.exe
+
+# Logs
+*.log
