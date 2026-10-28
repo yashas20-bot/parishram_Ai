@@ -1,5 +1,41 @@
 package finance
 
+// FindingCode represents a stable, machine-readable code for a financial evaluation finding.
+type FindingCode string
+
+const (
+	// FindingWithinBudget indicates the proposed purchase does not exceed the remaining budget.
+	FindingWithinBudget FindingCode = "WITHIN_BUDGET"
+
+	// FindingBudgetExceeded indicates the proposed purchase exceeds the user's remaining monthly budget.
+	FindingBudgetExceeded FindingCode = "BUDGET_EXCEEDED"
+
+	// FindingWithinSpendingLimit indicates the proposed purchase amount complies with the configured spending limit.
+	FindingWithinSpendingLimit FindingCode = "WITHIN_SPENDING_LIMIT"
+
+	// FindingSpendingLimitExceeded indicates the proposed purchase amount exceeds the configured spending limit.
+	FindingSpendingLimitExceeded FindingCode = "SPENDING_LIMIT_EXCEEDED"
+
+	// FindingAlertThresholdExceeded indicates projected spending reaches or crosses the alert threshold.
+	FindingAlertThresholdExceeded FindingCode = "ALERT_THRESHOLD_EXCEEDED"
+)
+
+// Severity indicates the significance level of an evaluation finding.
+type Severity string
+
+const (
+	SeverityInfo     Severity = "INFO"
+	SeverityWarning  Severity = "WARNING"
+	SeverityCritical Severity = "CRITICAL"
+)
+
+// RiskFinding represents an individual explainable observation about a proposed purchase.
+type RiskFinding struct {
+	Code     FindingCode `json:"code"`
+	Severity Severity    `json:"severity"`
+	Message  string      `json:"message"`
+}
+
 // BudgetInput represents the user's monthly budget.
 type BudgetInput struct {
 	Limit    int64  `json:"limit"`
@@ -56,8 +92,22 @@ type RiskCheckResult struct {
 	CanProceed               bool                `json:"can_proceed"`
 	RiskScore                int                 `json:"risk_score"` // 0 (lowest risk) to 100 (highest risk)
 	Warnings                 []string            `json:"warnings"`
+	Findings                 []RiskFinding       `json:"findings"`
 	BudgetImpact             *BudgetImpactResult `json:"budget_impact"`
 	ExceedsSpendingLimit     bool                `json:"exceeds_spending_limit"`
 	SpendingLimitExcessMinor int64               `json:"spending_limit_excess_minor"`
 	ExceedsAlertThreshold    bool                `json:"exceeds_alert_threshold"`
+}
+
+// HasFinding checks whether a specific machine-readable finding code is present in the result.
+func (r *RiskCheckResult) HasFinding(code FindingCode) bool {
+	if r == nil {
+		return false
+	}
+	for _, f := range r.Findings {
+		if f.Code == code {
+			return true
+		}
+	}
+	return false
 }

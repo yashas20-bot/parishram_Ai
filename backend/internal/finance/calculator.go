@@ -102,6 +102,8 @@ func CalculateBudgetImpact(budget *BudgetInput, spending *SpendingInput, purchas
 
 // EvaluatePrePaymentRisk executes deterministic risk checks on a proposed purchase,
 // checking budget excess, single-purchase spending limits, and utilization alert thresholds.
+// It produces structured, explainable findings with stable machine-readable codes.
+// It does not claim to detect fraud, predict actual payment success, or guarantee purchase safety.
 func EvaluatePrePaymentRisk(input RiskCheckInput) (*RiskCheckResult, error) {
 	if input.Budget == nil {
 		return nil, fmt.Errorf("%w: budget is required", ErrMissingData)
@@ -144,44 +146,75 @@ func EvaluatePrePaymentRisk(input RiskCheckInput) (*RiskCheckResult, error) {
 	}
 
 	var warnings []string
+	var findings []RiskFinding
 	riskScore := 0
 
-	// Check 1: Budget Exceeded
+	// Check 1: Budget Exceeded vs Within Budget
 	if impact.ExceedsBudget {
 		riskScore += 45
-		warnings = append(warnings, fmt.Sprintf(
+		msg := fmt.Sprintf(
 			"Purchase exceeds remaining budget by %s %d (in minor units).",
 			impact.Currency, impact.ExceededAmountMinor,
-		))
+		)
+		warnings = append(warnings, msg)
+		findings = append(findings, RiskFinding{
+			Code:     FindingBudgetExceeded,
+			Severity: SeverityCritical,
+			Message:  msg,
+		})
+	} else {
+		findings = append(findings, RiskFinding{
+			Code:     FindingWithinBudget,
+			Severity: SeverityInfo,
+			Message:  fmt.Sprintf("Purchase is within remaining budget (%s %d remaining).", impact.Currency, impact.RemainingAfterMinor),
+		})
 	}
 
-	// Check 2: Spending Limit Exceeded
+	// Check 2: Spending Limit (distinguishing unconfigured from a configured limit of zero)
 	exceedsSpendingLimit := false
 	var limitExcess int64
-	if input.SpendingLimit != nil && input.SpendingLimit.Limit > 0 {
+	if input.SpendingLimit != nil {
 		if input.Purchase.Amount > input.SpendingLimit.Limit {
 			exceedsSpendingLimit = true
 			limitExcess = input.Purchase.Amount - input.SpendingLimit.Limit
 			riskScore += 35
-			warnings = append(warnings, fmt.Sprintf(
+			msg := fmt.Sprintf(
 				"Purchase amount (%s %d) exceeds configured spending limit of %s %d.",
 				input.Purchase.Currency, input.Purchase.Amount,
 				input.SpendingLimit.Currency, input.SpendingLimit.Limit,
-			))
+			)
+			warnings = append(warnings, msg)
+			findings = append(findings, RiskFinding{
+				Code:     FindingSpendingLimitExceeded,
+				Severity: SeverityCritical,
+				Message:  msg,
+			})
+		} else {
+			findings = append(findings, RiskFinding{
+				Code:     FindingWithinSpendingLimit,
+				Severity: SeverityInfo,
+				Message:  fmt.Sprintf("Purchase is within configured spending limit of %s %d.", input.SpendingLimit.Currency, input.SpendingLimit.Limit),
+			})
 		}
 	}
 
-	// Check 3: Alert Threshold Exceeded (if not already over budget)
+	// Check 3: Alert Threshold Exceeded
 	exceedsAlertThreshold := false
 	if impact.UtilizationAfterPercent >= int64(threshold) {
 		exceedsAlertThreshold = true
+		msg := fmt.Sprintf(
+			"Purchase pushes budget utilization to %d%%, reaching or exceeding alert threshold of %d%%.",
+			impact.UtilizationAfterPercent, threshold,
+		)
 		if !impact.ExceedsBudget {
 			riskScore += 20
-			warnings = append(warnings, fmt.Sprintf(
-				"Purchase pushes budget utilization to %d%%, exceeding alert threshold of %d%%.",
-				impact.UtilizationAfterPercent, threshold,
-			))
+			warnings = append(warnings, msg)
 		}
+		findings = append(findings, RiskFinding{
+			Code:     FindingAlertThresholdExceeded,
+			Severity: SeverityWarning,
+			Message:  msg,
+		})
 	}
 
 	if riskScore > 100 {
@@ -194,6 +227,7 @@ func EvaluatePrePaymentRisk(input RiskCheckInput) (*RiskCheckResult, error) {
 		CanProceed:               canProceed,
 		RiskScore:                riskScore,
 		Warnings:                 warnings,
+		Findings:                 findings,
 		BudgetImpact:             impact,
 		ExceedsSpendingLimit:     exceedsSpendingLimit,
 		SpendingLimitExcessMinor: limitExcess,

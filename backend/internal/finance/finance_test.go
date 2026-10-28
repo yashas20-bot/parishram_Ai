@@ -113,13 +113,8 @@ func TestCalculateUtilization_MaxInt64Boundaries(t *testing.T) {
 	}
 
 	// 5. Overflow on base + fractional addition
-	// Construct a case where q = MaxInt64 / 100 (so base = (MaxInt64/100)*100), but fractional causes addition overflow
 	limit := int64(1000)
 	maxQ := int64(math.MaxInt64 / 100)
-	// spent = maxQ * limit + 999. Then q = maxQ, r = 999.
-	// fractional = floor(999 * 100 / 1000) = 99.
-	// base = maxQ * 100 = 9223372036854775800.
-	// base + 99 = 9223372036854775899 > math.MaxInt64 (9223372036854775807).
 	if maxQ <= math.MaxInt64/limit {
 		spentWithBigFrac := maxQ*limit + 999
 		_, err = CalculateUtilization(spentWithBigFrac, limit)
@@ -284,8 +279,11 @@ func TestEvaluatePrePaymentRisk_Scenarios(t *testing.T) {
 	if res.RiskScore != 0 {
 		t.Errorf("expected RiskScore=0, got %d", res.RiskScore)
 	}
-	if len(res.Warnings) != 0 {
-		t.Errorf("expected no warnings, got %v", res.Warnings)
+	if !res.HasFinding(FindingWithinBudget) {
+		t.Errorf("expected FindingWithinBudget")
+	}
+	if !res.HasFinding(FindingWithinSpendingLimit) {
+		t.Errorf("expected FindingWithinSpendingLimit")
 	}
 
 	// Scenario 2: Exceeds Alert Threshold (pushes to 85% util, 6,500.00 purchase)
@@ -306,6 +304,9 @@ func TestEvaluatePrePaymentRisk_Scenarios(t *testing.T) {
 	}
 	if !alertRes.ExceedsAlertThreshold {
 		t.Errorf("expected ExceedsAlertThreshold=true")
+	}
+	if !alertRes.HasFinding(FindingAlertThresholdExceeded) {
+		t.Errorf("expected FindingAlertThresholdExceeded")
 	}
 	if alertRes.RiskScore == 0 {
 		t.Errorf("expected non-zero risk score for alert threshold breach")
@@ -328,6 +329,9 @@ func TestEvaluatePrePaymentRisk_Scenarios(t *testing.T) {
 	if !limitRes.ExceedsSpendingLimit {
 		t.Errorf("expected ExceedsSpendingLimit=true")
 	}
+	if !limitRes.HasFinding(FindingSpendingLimitExceeded) {
+		t.Errorf("expected FindingSpendingLimitExceeded")
+	}
 	if limitRes.SpendingLimitExcessMinor != 100000 {
 		t.Errorf("expected 100000 excess, got %d", limitRes.SpendingLimitExcessMinor)
 	}
@@ -349,6 +353,207 @@ func TestEvaluatePrePaymentRisk_Scenarios(t *testing.T) {
 	if !budgetRes.BudgetImpact.ExceedsBudget {
 		t.Errorf("expected ExceedsBudget=true")
 	}
+	if !budgetRes.HasFinding(FindingBudgetExceeded) {
+		t.Errorf("expected FindingBudgetExceeded")
+	}
+}
+
+func TestEvaluatePrePaymentRisk_ExactBudgetBoundaries(t *testing.T) {
+	budget := &BudgetInput{Limit: 100000, Currency: "INR"}    // 1,000.00
+	spending := &SpendingInput{Spent: 60000, Currency: "INR"} // 600.00
+
+	// 1. Exact zero remaining budget (purchase = 400.00)
+	exactPurchase := &PurchaseInput{Amount: 40000, Currency: "INR"}
+	res, err := EvaluatePrePaymentRisk(RiskCheckInput{
+		Budget:   budget,
+		Spending: spending,
+		Purchase: exactPurchase,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.BudgetImpact.RemainingAfterMinor != 0 {
+		t.Errorf("expected RemainingAfterMinor=0, got %d", res.BudgetImpact.RemainingAfterMinor)
+	}
+	if res.BudgetImpact.ExceedsBudget {
+		t.Errorf("exact budget should not be marked as ExceedsBudget")
+	}
+	if !res.CanProceed {
+		t.Errorf("exact budget should allow CanProceed=true")
+	}
+	if !res.HasFinding(FindingWithinBudget) {
+		t.Errorf("expected FindingWithinBudget")
+	}
+	if res.HasFinding(FindingBudgetExceeded) {
+		t.Errorf("did not expect FindingBudgetExceeded")
+	}
+
+	// 2. Exceeds budget by exactly one minor unit (purchase = 400.01 = 40001 minor units)
+	overByOne := &PurchaseInput{Amount: 40001, Currency: "INR"}
+	resOver, err := EvaluatePrePaymentRisk(RiskCheckInput{
+		Budget:   budget,
+		Spending: spending,
+		Purchase: overByOne,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resOver.BudgetImpact.RemainingAfterMinor != -1 {
+		t.Errorf("expected RemainingAfterMinor=-1, got %d", resOver.BudgetImpact.RemainingAfterMinor)
+	}
+	if !resOver.BudgetImpact.ExceedsBudget {
+		t.Errorf("expected ExceedsBudget=true when over by 1 minor unit")
+	}
+	if resOver.BudgetImpact.ExceededAmountMinor != 1 {
+		t.Errorf("expected ExceededAmountMinor=1, got %d", resOver.BudgetImpact.ExceededAmountMinor)
+	}
+	if resOver.CanProceed {
+		t.Errorf("expected CanProceed=false when over budget")
+	}
+	if !resOver.HasFinding(FindingBudgetExceeded) {
+		t.Errorf("expected FindingBudgetExceeded")
+	}
+}
+
+func TestEvaluatePrePaymentRisk_SpendingLimitBoundaries(t *testing.T) {
+	budget := &BudgetInput{Limit: 1000000, Currency: "INR"}
+	spending := &SpendingInput{Spent: 0, Currency: "INR"}
+	limit500 := &SpendingLimitInput{Limit: 50000, Currency: "INR"} // 500.00 limit
+
+	// 1. Below spending limit (499.99 = 49999 minor units)
+	resBelow, err := EvaluatePrePaymentRisk(RiskCheckInput{
+		Budget:        budget,
+		Spending:      spending,
+		Purchase:      &PurchaseInput{Amount: 49999, Currency: "INR"},
+		SpendingLimit: limit500,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resBelow.ExceedsSpendingLimit {
+		t.Errorf("expected ExceedsSpendingLimit=false for amount below limit")
+	}
+	if !resBelow.HasFinding(FindingWithinSpendingLimit) {
+		t.Errorf("expected FindingWithinSpendingLimit")
+	}
+
+	// 2. Exactly at spending limit (500.00 = 50000 minor units)
+	resExact, err := EvaluatePrePaymentRisk(RiskCheckInput{
+		Budget:        budget,
+		Spending:      spending,
+		Purchase:      &PurchaseInput{Amount: 50000, Currency: "INR"},
+		SpendingLimit: limit500,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resExact.ExceedsSpendingLimit {
+		t.Errorf("expected ExceedsSpendingLimit=false for amount exactly at limit")
+	}
+	if resExact.SpendingLimitExcessMinor != 0 {
+		t.Errorf("expected SpendingLimitExcessMinor=0, got %d", resExact.SpendingLimitExcessMinor)
+	}
+	if !resExact.HasFinding(FindingWithinSpendingLimit) {
+		t.Errorf("expected FindingWithinSpendingLimit")
+	}
+
+	// 3. Above spending limit by 1 minor unit (500.01 = 50001 minor units)
+	resAbove, err := EvaluatePrePaymentRisk(RiskCheckInput{
+		Budget:        budget,
+		Spending:      spending,
+		Purchase:      &PurchaseInput{Amount: 50001, Currency: "INR"},
+		SpendingLimit: limit500,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resAbove.ExceedsSpendingLimit {
+		t.Errorf("expected ExceedsSpendingLimit=true for amount above limit")
+	}
+	if resAbove.SpendingLimitExcessMinor != 1 {
+		t.Errorf("expected SpendingLimitExcessMinor=1, got %d", resAbove.SpendingLimitExcessMinor)
+	}
+	if !resAbove.HasFinding(FindingSpendingLimitExceeded) {
+		t.Errorf("expected FindingSpendingLimitExceeded")
+	}
+	if resAbove.CanProceed {
+		t.Errorf("expected CanProceed=false when spending limit exceeded")
+	}
+
+	// 4. Configured spending limit of zero (freeze)
+	limitZero := &SpendingLimitInput{Limit: 0, Currency: "INR"}
+	resZero, err := EvaluatePrePaymentRisk(RiskCheckInput{
+		Budget:        budget,
+		Spending:      spending,
+		Purchase:      &PurchaseInput{Amount: 1, Currency: "INR"},
+		SpendingLimit: limitZero,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resZero.ExceedsSpendingLimit {
+		t.Errorf("expected ExceedsSpendingLimit=true for configured limit of 0 and amount 1")
+	}
+	if resZero.SpendingLimitExcessMinor != 1 {
+		t.Errorf("expected excess=1, got %d", resZero.SpendingLimitExcessMinor)
+	}
+	if !resZero.HasFinding(FindingSpendingLimitExceeded) {
+		t.Errorf("expected FindingSpendingLimitExceeded for zero limit")
+	}
+	if resZero.CanProceed {
+		t.Errorf("expected CanProceed=false for zero limit breach")
+	}
+
+	// 5. Unconfigured spending limit (nil)
+	resUnconfigured, err := EvaluatePrePaymentRisk(RiskCheckInput{
+		Budget:        budget,
+		Spending:      spending,
+		Purchase:      &PurchaseInput{Amount: 100000, Currency: "INR"},
+		SpendingLimit: nil,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resUnconfigured.ExceedsSpendingLimit {
+		t.Errorf("unconfigured spending limit should not trigger ExceedsSpendingLimit")
+	}
+	if resUnconfigured.HasFinding(FindingSpendingLimitExceeded) || resUnconfigured.HasFinding(FindingWithinSpendingLimit) {
+		t.Errorf("unconfigured limit should not emit spending limit findings")
+	}
+}
+
+func TestEvaluatePrePaymentRisk_DeterminismAndConsistency(t *testing.T) {
+	input := RiskCheckInput{
+		Budget:        &BudgetInput{Limit: 500000, Currency: "INR"},
+		Spending:      &SpendingInput{Spent: 100000, Currency: "INR"},
+		Purchase:      &PurchaseInput{Amount: 200000, Currency: "INR"},
+		SpendingLimit: &SpendingLimitInput{Limit: 300000, Currency: "INR"},
+	}
+
+	res1, err1 := EvaluatePrePaymentRisk(input)
+	if err1 != nil {
+		t.Fatalf("unexpected error run 1: %v", err1)
+	}
+
+	res2, err2 := EvaluatePrePaymentRisk(input)
+	if err2 != nil {
+		t.Fatalf("unexpected error run 2: %v", err2)
+	}
+
+	if res1.CanProceed != res2.CanProceed {
+		t.Errorf("CanProceed inconsistent: %v vs %v", res1.CanProceed, res2.CanProceed)
+	}
+	if res1.RiskScore != res2.RiskScore {
+		t.Errorf("RiskScore inconsistent: %d vs %d", res1.RiskScore, res2.RiskScore)
+	}
+	if len(res1.Findings) != len(res2.Findings) {
+		t.Errorf("Findings count inconsistent: %d vs %d", len(res1.Findings), len(res2.Findings))
+	}
+	for i := range res1.Findings {
+		if res1.Findings[i].Code != res2.Findings[i].Code {
+			t.Errorf("Finding [%d] code inconsistent: %s vs %s", i, res1.Findings[i].Code, res2.Findings[i].Code)
+		}
+	}
 }
 
 func TestInvalidInputs_NeverProduceSuccessResult(t *testing.T) {
@@ -357,46 +562,51 @@ func TestInvalidInputs_NeverProduceSuccessResult(t *testing.T) {
 	validPurchase := &PurchaseInput{Amount: 50, Currency: "INR"}
 
 	// Test nil inputs
-	_, err := CalculateBudgetImpact(nil, validSpending, validPurchase)
-	if err == nil || !errors.Is(err, ErrMissingData) {
-		t.Errorf("expected ErrMissingData for nil budget, got %v", err)
+	res, err := CalculateBudgetImpact(nil, validSpending, validPurchase)
+	if res != nil || err == nil || !errors.Is(err, ErrMissingData) {
+		t.Errorf("expected (nil, ErrMissingData) for nil budget, got (%v, %v)", res, err)
 	}
 
-	_, err = CalculateBudgetImpact(validBudget, nil, validPurchase)
-	if err == nil || !errors.Is(err, ErrMissingData) {
-		t.Errorf("expected ErrMissingData for nil spending, got %v", err)
+	res, err = CalculateBudgetImpact(validBudget, nil, validPurchase)
+	if res != nil || err == nil || !errors.Is(err, ErrMissingData) {
+		t.Errorf("expected (nil, ErrMissingData) for nil spending, got (%v, %v)", res, err)
 	}
 
-	_, err = CalculateBudgetImpact(validBudget, validSpending, nil)
-	if err == nil || !errors.Is(err, ErrMissingData) {
-		t.Errorf("expected ErrMissingData for nil purchase, got %v", err)
+	res, err = CalculateBudgetImpact(validBudget, validSpending, nil)
+	if res != nil || err == nil || !errors.Is(err, ErrMissingData) {
+		t.Errorf("expected (nil, ErrMissingData) for nil purchase, got (%v, %v)", res, err)
 	}
 
 	// Test negative/zero amounts
-	_, err = CalculateBudgetImpact(&BudgetInput{Limit: 0, Currency: "INR"}, validSpending, validPurchase)
-	if err == nil || !errors.Is(err, ErrInvalidAmount) {
-		t.Errorf("expected ErrInvalidAmount for 0 budget, got %v", err)
+	res, err = CalculateBudgetImpact(&BudgetInput{Limit: 0, Currency: "INR"}, validSpending, validPurchase)
+	if res != nil || err == nil || !errors.Is(err, ErrInvalidAmount) {
+		t.Errorf("expected (nil, ErrInvalidAmount) for 0 budget, got (%v, %v)", res, err)
 	}
 
-	_, err = CalculateBudgetImpact(validBudget, &SpendingInput{Spent: -1, Currency: "INR"}, validPurchase)
-	if err == nil || !errors.Is(err, ErrInvalidAmount) {
-		t.Errorf("expected ErrInvalidAmount for negative spending, got %v", err)
+	res, err = CalculateBudgetImpact(validBudget, &SpendingInput{Spent: -1, Currency: "INR"}, validPurchase)
+	if res != nil || err == nil || !errors.Is(err, ErrInvalidAmount) {
+		t.Errorf("expected (nil, ErrInvalidAmount) for negative spending, got (%v, %v)", res, err)
 	}
 
-	_, err = CalculateBudgetImpact(validBudget, validSpending, &PurchaseInput{Amount: 0, Currency: "INR"})
-	if err == nil || !errors.Is(err, ErrInvalidAmount) {
-		t.Errorf("expected ErrInvalidAmount for zero purchase amount, got %v", err)
+	res, err = CalculateBudgetImpact(validBudget, validSpending, &PurchaseInput{Amount: 0, Currency: "INR"})
+	if res != nil || err == nil || !errors.Is(err, ErrInvalidAmount) {
+		t.Errorf("expected (nil, ErrInvalidAmount) for zero purchase amount, got (%v, %v)", res, err)
+	}
+
+	res, err = CalculateBudgetImpact(validBudget, validSpending, &PurchaseInput{Amount: -10, Currency: "INR"})
+	if res != nil || err == nil || !errors.Is(err, ErrInvalidAmount) {
+		t.Errorf("expected (nil, ErrInvalidAmount) for negative purchase amount, got (%v, %v)", res, err)
 	}
 
 	// Test risk check with invalid alert threshold
 	badThreshold := 105
-	_, err = EvaluatePrePaymentRisk(RiskCheckInput{
+	resRisk, err := EvaluatePrePaymentRisk(RiskCheckInput{
 		Budget:                validBudget,
 		Spending:              validSpending,
 		Purchase:              validPurchase,
 		AlertThresholdPercent: &badThreshold,
 	})
-	if err == nil || !errors.Is(err, ErrInvalidAmount) {
-		t.Errorf("expected ErrInvalidAmount for 105%% threshold, got %v", err)
+	if resRisk != nil || err == nil || !errors.Is(err, ErrInvalidAmount) {
+		t.Errorf("expected (nil, ErrInvalidAmount) for 105%% threshold, got (%v, %v)", resRisk, err)
 	}
 }
