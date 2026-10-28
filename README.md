@@ -1,4 +1,4 @@
-# Parishram AI (परिश्रम AI)
+# Parishram AI
 > **Smarter Decisions. Safer Payments.**
 
 Parishram AI is an AI-powered payment intelligence and consumer financial assistant built for the **PayPal AI Hackathon**.
