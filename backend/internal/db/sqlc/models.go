@@ -101,4 +101,5 @@ type User struct {
 	Currency      string             `json:"currency"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	SupabaseUid   pgtype.UUID        `json:"supabase_uid"`
 }

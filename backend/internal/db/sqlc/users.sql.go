@@ -7,6 +7,8 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const createUser = `-- name: CreateUser :one
@@ -18,7 +20,7 @@ INSERT INTO users (
 ) VALUES (
     $1, $2, $3, $4
 )
-RETURNING id, email, name, spending_limit, currency, created_at, updated_at
+RETURNING id, email, name, spending_limit, currency, created_at, updated_at, supabase_uid
 `
 
 type CreateUserParams struct {
@@ -44,12 +46,56 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.Currency,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SupabaseUid,
+	)
+	return i, err
+}
+
+const createUserWithSupabaseUID = `-- name: CreateUserWithSupabaseUID :one
+INSERT INTO users (
+    supabase_uid,
+    email,
+    name,
+    spending_limit,
+    currency
+) VALUES (
+    $1, $2, $3, $4, $5
+)
+RETURNING id, email, name, spending_limit, currency, created_at, updated_at, supabase_uid
+`
+
+type CreateUserWithSupabaseUIDParams struct {
+	SupabaseUid   pgtype.UUID `json:"supabase_uid"`
+	Email         string      `json:"email"`
+	Name          string      `json:"name"`
+	SpendingLimit int64       `json:"spending_limit"`
+	Currency      string      `json:"currency"`
+}
+
+func (q *Queries) CreateUserWithSupabaseUID(ctx context.Context, arg CreateUserWithSupabaseUIDParams) (User, error) {
+	row := q.db.QueryRow(ctx, createUserWithSupabaseUID,
+		arg.SupabaseUid,
+		arg.Email,
+		arg.Name,
+		arg.SpendingLimit,
+		arg.Currency,
+	)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.Name,
+		&i.SpendingLimit,
+		&i.Currency,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SupabaseUid,
 	)
 	return i, err
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, name, spending_limit, currency, created_at, updated_at FROM users
+SELECT id, email, name, spending_limit, currency, created_at, updated_at, supabase_uid FROM users
 WHERE email = $1 LIMIT 1
 `
 
@@ -64,12 +110,13 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.Currency,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SupabaseUid,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, name, spending_limit, currency, created_at, updated_at FROM users
+SELECT id, email, name, spending_limit, currency, created_at, updated_at, supabase_uid FROM users
 WHERE id = $1 LIMIT 1
 `
 
@@ -84,12 +131,63 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
 		&i.Currency,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SupabaseUid,
+	)
+	return i, err
+}
+
+const getUserBySupabaseUID = `-- name: GetUserBySupabaseUID :one
+SELECT id, email, name, spending_limit, currency, created_at, updated_at, supabase_uid FROM users
+WHERE supabase_uid = $1 LIMIT 1
+`
+
+func (q *Queries) GetUserBySupabaseUID(ctx context.Context, supabaseUid pgtype.UUID) (User, error) {
+	row := q.db.QueryRow(ctx, getUserBySupabaseUID, supabaseUid)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.Name,
+		&i.SpendingLimit,
+		&i.Currency,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SupabaseUid,
+	)
+	return i, err
+}
+
+const linkSupabaseUIDByEmail = `-- name: LinkSupabaseUIDByEmail :one
+UPDATE users
+SET supabase_uid = $2,
+    updated_at = CURRENT_TIMESTAMP
+WHERE email = $1 AND (supabase_uid IS NULL OR supabase_uid = $2)
+RETURNING id, email, name, spending_limit, currency, created_at, updated_at, supabase_uid
+`
+
+type LinkSupabaseUIDByEmailParams struct {
+	Email       string      `json:"email"`
+	SupabaseUid pgtype.UUID `json:"supabase_uid"`
+}
+
+func (q *Queries) LinkSupabaseUIDByEmail(ctx context.Context, arg LinkSupabaseUIDByEmailParams) (User, error) {
+	row := q.db.QueryRow(ctx, linkSupabaseUIDByEmail, arg.Email, arg.SupabaseUid)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.Name,
+		&i.SpendingLimit,
+		&i.Currency,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SupabaseUid,
 	)
 	return i, err
 }
 
 const listUsers = `-- name: ListUsers :many
-SELECT id, email, name, spending_limit, currency, created_at, updated_at FROM users
+SELECT id, email, name, spending_limit, currency, created_at, updated_at, supabase_uid FROM users
 ORDER BY id ASC
 `
 
@@ -110,6 +208,7 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 			&i.Currency,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SupabaseUid,
 		); err != nil {
 			return nil, err
 		}
@@ -126,7 +225,7 @@ UPDATE users
 SET spending_limit = $2,
     updated_at = CURRENT_TIMESTAMP
 WHERE id = $1
-RETURNING id, email, name, spending_limit, currency, created_at, updated_at
+RETURNING id, email, name, spending_limit, currency, created_at, updated_at, supabase_uid
 `
 
 type UpdateUserSpendingLimitParams struct {
@@ -145,6 +244,84 @@ func (q *Queries) UpdateUserSpendingLimit(ctx context.Context, arg UpdateUserSpe
 		&i.Currency,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SupabaseUid,
+	)
+	return i, err
+}
+
+const updateUserSpendingLimitBySupabaseUID = `-- name: UpdateUserSpendingLimitBySupabaseUID :one
+UPDATE users
+SET spending_limit = $2,
+    updated_at = CURRENT_TIMESTAMP
+WHERE supabase_uid = $1
+RETURNING id, email, name, spending_limit, currency, created_at, updated_at, supabase_uid
+`
+
+type UpdateUserSpendingLimitBySupabaseUIDParams struct {
+	SupabaseUid   pgtype.UUID `json:"supabase_uid"`
+	SpendingLimit int64       `json:"spending_limit"`
+}
+
+func (q *Queries) UpdateUserSpendingLimitBySupabaseUID(ctx context.Context, arg UpdateUserSpendingLimitBySupabaseUIDParams) (User, error) {
+	row := q.db.QueryRow(ctx, updateUserSpendingLimitBySupabaseUID, arg.SupabaseUid, arg.SpendingLimit)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.Name,
+		&i.SpendingLimit,
+		&i.Currency,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SupabaseUid,
+	)
+	return i, err
+}
+
+const upsertUserWithSupabaseUID = `-- name: UpsertUserWithSupabaseUID :one
+INSERT INTO users (
+    supabase_uid,
+    email,
+    name,
+    spending_limit,
+    currency
+) VALUES (
+    $1, $2, $3, $4, $5
+)
+ON CONFLICT (supabase_uid) DO UPDATE
+SET email = EXCLUDED.email,
+    name = CASE WHEN EXCLUDED.name <> '' THEN EXCLUDED.name ELSE users.name END,
+    updated_at = CURRENT_TIMESTAMP
+RETURNING id, email, name, spending_limit, currency, created_at, updated_at, supabase_uid
+`
+
+type UpsertUserWithSupabaseUIDParams struct {
+	SupabaseUid   pgtype.UUID `json:"supabase_uid"`
+	Email         string      `json:"email"`
+	Name          string      `json:"name"`
+	SpendingLimit int64       `json:"spending_limit"`
+	Currency      string      `json:"currency"`
+}
+
+// Idempotent provisioning operation that handles repeated attempts using the unique constraint.
+func (q *Queries) UpsertUserWithSupabaseUID(ctx context.Context, arg UpsertUserWithSupabaseUIDParams) (User, error) {
+	row := q.db.QueryRow(ctx, upsertUserWithSupabaseUID,
+		arg.SupabaseUid,
+		arg.Email,
+		arg.Name,
+		arg.SpendingLimit,
+		arg.Currency,
+	)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.Name,
+		&i.SpendingLimit,
+		&i.Currency,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SupabaseUid,
 	)
 	return i, err
 }

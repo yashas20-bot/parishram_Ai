@@ -65,8 +65,39 @@ SELECT id, user_id, purchase_id, paypal_order_id, amount, currency, status, capt
 WHERE id = $1 LIMIT 1
 `
 
+// Internal/system query
 func (q *Queries) GetPaymentByID(ctx context.Context, id int64) (Payment, error) {
 	row := q.db.QueryRow(ctx, getPaymentByID, id)
+	var i Payment
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.PurchaseID,
+		&i.PaypalOrderID,
+		&i.Amount,
+		&i.Currency,
+		&i.Status,
+		&i.CaptureID,
+		&i.FailureReason,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getPaymentByIDAndUser = `-- name: GetPaymentByIDAndUser :one
+SELECT id, user_id, purchase_id, paypal_order_id, amount, currency, status, capture_id, failure_reason, created_at, updated_at FROM payments
+WHERE id = $1 AND user_id = $2 LIMIT 1
+`
+
+type GetPaymentByIDAndUserParams struct {
+	ID     int64 `json:"id"`
+	UserID int64 `json:"user_id"`
+}
+
+// User-facing scoped read query (prevents IDOR)
+func (q *Queries) GetPaymentByIDAndUser(ctx context.Context, arg GetPaymentByIDAndUserParams) (Payment, error) {
+	row := q.db.QueryRow(ctx, getPaymentByIDAndUser, arg.ID, arg.UserID)
 	var i Payment
 	err := row.Scan(
 		&i.ID,
@@ -89,6 +120,7 @@ SELECT id, user_id, purchase_id, paypal_order_id, amount, currency, status, capt
 WHERE paypal_order_id = $1 LIMIT 1
 `
 
+// Trusted query for PayPal webhook processing and status polling
 func (q *Queries) GetPaymentByPayPalOrderID(ctx context.Context, paypalOrderID string) (Payment, error) {
 	row := q.db.QueryRow(ctx, getPaymentByPayPalOrderID, paypalOrderID)
 	var i Payment
@@ -106,6 +138,82 @@ func (q *Queries) GetPaymentByPayPalOrderID(ctx context.Context, paypalOrderID s
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const getPaymentByPurchaseIDAndUser = `-- name: GetPaymentByPurchaseIDAndUser :one
+SELECT id, user_id, purchase_id, paypal_order_id, amount, currency, status, capture_id, failure_reason, created_at, updated_at FROM payments
+WHERE purchase_id = $1 AND user_id = $2
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+type GetPaymentByPurchaseIDAndUserParams struct {
+	PurchaseID pgtype.Int8 `json:"purchase_id"`
+	UserID     int64       `json:"user_id"`
+}
+
+// Retrieves the most recent payment record associated with a purchase for the authenticated user
+func (q *Queries) GetPaymentByPurchaseIDAndUser(ctx context.Context, arg GetPaymentByPurchaseIDAndUserParams) (Payment, error) {
+	row := q.db.QueryRow(ctx, getPaymentByPurchaseIDAndUser, arg.PurchaseID, arg.UserID)
+	var i Payment
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.PurchaseID,
+		&i.PaypalOrderID,
+		&i.Amount,
+		&i.Currency,
+		&i.Status,
+		&i.CaptureID,
+		&i.FailureReason,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const listPaymentsByPurchaseID = `-- name: ListPaymentsByPurchaseID :many
+SELECT id, user_id, purchase_id, paypal_order_id, amount, currency, status, capture_id, failure_reason, created_at, updated_at FROM payments
+WHERE purchase_id = $1 AND user_id = $2
+ORDER BY created_at DESC
+`
+
+type ListPaymentsByPurchaseIDParams struct {
+	PurchaseID pgtype.Int8 `json:"purchase_id"`
+	UserID     int64       `json:"user_id"`
+}
+
+// Lists all payment records associated with a purchase for the authenticated user
+func (q *Queries) ListPaymentsByPurchaseID(ctx context.Context, arg ListPaymentsByPurchaseIDParams) ([]Payment, error) {
+	rows, err := q.db.Query(ctx, listPaymentsByPurchaseID, arg.PurchaseID, arg.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Payment{}
+	for rows.Next() {
+		var i Payment
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.PurchaseID,
+			&i.PaypalOrderID,
+			&i.Amount,
+			&i.Currency,
+			&i.Status,
+			&i.CaptureID,
+			&i.FailureReason,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listPaymentsByUserID = `-- name: ListPaymentsByUserID :many
@@ -170,6 +278,7 @@ type UpdatePaymentStatusParams struct {
 	FailureReason string      `json:"failure_reason"`
 }
 
+// Internal/system query
 func (q *Queries) UpdatePaymentStatus(ctx context.Context, arg UpdatePaymentStatusParams) (Payment, error) {
 	row := q.db.QueryRow(ctx, updatePaymentStatus,
 		arg.ID,
@@ -211,12 +320,57 @@ type UpdatePaymentStatusByPayPalOrderIDParams struct {
 	FailureReason string      `json:"failure_reason"`
 }
 
+// Trusted query for idempotent PayPal webhook updates
 func (q *Queries) UpdatePaymentStatusByPayPalOrderID(ctx context.Context, arg UpdatePaymentStatusByPayPalOrderIDParams) (Payment, error) {
 	row := q.db.QueryRow(ctx, updatePaymentStatusByPayPalOrderID,
 		arg.PaypalOrderID,
 		arg.Status,
 		arg.CaptureID,
 		arg.FailureReason,
+	)
+	var i Payment
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.PurchaseID,
+		&i.PaypalOrderID,
+		&i.Amount,
+		&i.Currency,
+		&i.Status,
+		&i.CaptureID,
+		&i.FailureReason,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updatePaymentStatusForUser = `-- name: UpdatePaymentStatusForUser :one
+UPDATE payments
+SET status = $2,
+    capture_id = COALESCE($3, capture_id),
+    failure_reason = COALESCE($4, failure_reason),
+    updated_at = CURRENT_TIMESTAMP
+WHERE id = $1 AND user_id = $5
+RETURNING id, user_id, purchase_id, paypal_order_id, amount, currency, status, capture_id, failure_reason, created_at, updated_at
+`
+
+type UpdatePaymentStatusForUserParams struct {
+	ID            int64       `json:"id"`
+	Status        string      `json:"status"`
+	CaptureID     pgtype.Text `json:"capture_id"`
+	FailureReason string      `json:"failure_reason"`
+	UserID        int64       `json:"user_id"`
+}
+
+// User-facing payment status update (prevents IDOR: requires authenticated user_id)
+func (q *Queries) UpdatePaymentStatusForUser(ctx context.Context, arg UpdatePaymentStatusForUserParams) (Payment, error) {
+	row := q.db.QueryRow(ctx, updatePaymentStatusForUser,
+		arg.ID,
+		arg.Status,
+		arg.CaptureID,
+		arg.FailureReason,
+		arg.UserID,
 	)
 	var i Payment
 	err := row.Scan(

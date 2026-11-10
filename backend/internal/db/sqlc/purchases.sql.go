@@ -73,6 +73,7 @@ SELECT id, user_id, merchant_name, item_name, amount, currency, status, risk_sco
 WHERE id = $1 LIMIT 1
 `
 
+// Internal/system query (e.g. backend reconciliation or payment linkage)
 func (q *Queries) GetPurchaseByID(ctx context.Context, id int64) (Purchase, error) {
 	row := q.db.QueryRow(ctx, getPurchaseByID, id)
 	var i Purchase
@@ -103,6 +104,7 @@ type GetPurchaseByIDAndUserParams struct {
 	UserID int64 `json:"user_id"`
 }
 
+// User-facing scoped read query (prevents IDOR)
 func (q *Queries) GetPurchaseByIDAndUser(ctx context.Context, arg GetPurchaseByIDAndUserParams) (Purchase, error) {
 	row := q.db.QueryRow(ctx, getPurchaseByIDAndUser, arg.ID, arg.UserID)
 	var i Purchase
@@ -182,8 +184,44 @@ type UpdatePurchaseStatusParams struct {
 	Status string `json:"status"`
 }
 
+// Internal/system query (e.g. PayPal webhook or admin reconciliation)
 func (q *Queries) UpdatePurchaseStatus(ctx context.Context, arg UpdatePurchaseStatusParams) (Purchase, error) {
 	row := q.db.QueryRow(ctx, updatePurchaseStatus, arg.ID, arg.Status)
+	var i Purchase
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.MerchantName,
+		&i.ItemName,
+		&i.Amount,
+		&i.Currency,
+		&i.Status,
+		&i.RiskScore,
+		&i.RiskFactors,
+		&i.Notes,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updatePurchaseStatusForUser = `-- name: UpdatePurchaseStatusForUser :one
+UPDATE purchases
+SET status = $2,
+    updated_at = CURRENT_TIMESTAMP
+WHERE id = $1 AND user_id = $3
+RETURNING id, user_id, merchant_name, item_name, amount, currency, status, risk_score, risk_factors, notes, created_at, updated_at
+`
+
+type UpdatePurchaseStatusForUserParams struct {
+	ID     int64  `json:"id"`
+	Status string `json:"status"`
+	UserID int64  `json:"user_id"`
+}
+
+// User-facing status update (prevents IDOR: requires authenticated user_id)
+func (q *Queries) UpdatePurchaseStatusForUser(ctx context.Context, arg UpdatePurchaseStatusForUserParams) (Purchase, error) {
+	row := q.db.QueryRow(ctx, updatePurchaseStatusForUser, arg.ID, arg.Status, arg.UserID)
 	var i Purchase
 	err := row.Scan(
 		&i.ID,

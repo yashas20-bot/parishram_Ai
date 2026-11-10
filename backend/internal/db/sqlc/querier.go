@@ -6,6 +6,8 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
@@ -18,31 +20,68 @@ type Querier interface {
 	CreatePurchaseProposal(ctx context.Context, arg CreatePurchaseProposalParams) (Purchase, error)
 	CreateSupportDraft(ctx context.Context, arg CreateSupportDraftParams) (SupportDraft, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
+	CreateUserWithSupabaseUID(ctx context.Context, arg CreateUserWithSupabaseUIDParams) (User, error)
+	// User-facing scoped deletion (prevents IDOR)
+	DeleteExpenseForUser(ctx context.Context, arg DeleteExpenseForUserParams) error
 	GetBudgetByUserID(ctx context.Context, userID int64) (Budget, error)
+	// User-facing scoped read query (prevents IDOR)
+	GetExpenseByIDAndUser(ctx context.Context, arg GetExpenseByIDAndUserParams) (Expense, error)
 	GetExpensesByCategory(ctx context.Context, arg GetExpensesByCategoryParams) ([]GetExpensesByCategoryRow, error)
+	// Calculates the authenticated user's confirmed expense total for a monthly period.
+	// Uses start-inclusive, end-exclusive interval [start, end) and filters by currency to prevent mixing currencies.
+	GetMonthlyExpenseTotalForUser(ctx context.Context, arg GetMonthlyExpenseTotalForUserParams) (int64, error)
+	GetMonthlyExpensesByCategory(ctx context.Context, arg GetMonthlyExpensesByCategoryParams) ([]GetMonthlyExpensesByCategoryRow, error)
+	// Internal/system query
 	GetPaymentByID(ctx context.Context, id int64) (Payment, error)
+	// User-facing scoped read query (prevents IDOR)
+	GetPaymentByIDAndUser(ctx context.Context, arg GetPaymentByIDAndUserParams) (Payment, error)
+	// Trusted query for PayPal webhook processing and status polling
 	GetPaymentByPayPalOrderID(ctx context.Context, paypalOrderID string) (Payment, error)
+	// Retrieves the most recent payment record associated with a purchase for the authenticated user
+	GetPaymentByPurchaseIDAndUser(ctx context.Context, arg GetPaymentByPurchaseIDAndUserParams) (Payment, error)
 	GetPaymentEventByPayPalEventID(ctx context.Context, paypalEventID string) (PaymentEvent, error)
+	// Internal/system query (e.g. backend reconciliation or payment linkage)
 	GetPurchaseByID(ctx context.Context, id int64) (Purchase, error)
+	// User-facing scoped read query (prevents IDOR)
 	GetPurchaseByIDAndUser(ctx context.Context, arg GetPurchaseByIDAndUserParams) (Purchase, error)
+	// Internal/system query
 	GetSupportDraftByID(ctx context.Context, id int64) (SupportDraft, error)
+	// User-facing scoped read query (prevents IDOR)
+	GetSupportDraftByIDAndUser(ctx context.Context, arg GetSupportDraftByIDAndUserParams) (SupportDraft, error)
 	GetTotalExpensesInPeriod(ctx context.Context, arg GetTotalExpensesInPeriodParams) (int64, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id int64) (User, error)
+	GetUserBySupabaseUID(ctx context.Context, supabaseUid pgtype.UUID) (User, error)
+	LinkSupabaseUIDByEmail(ctx context.Context, arg LinkSupabaseUIDByEmailParams) (User, error)
 	ListAuditLogsByEntity(ctx context.Context, arg ListAuditLogsByEntityParams) ([]AuditLog, error)
 	ListAuditLogsByUserID(ctx context.Context, arg ListAuditLogsByUserIDParams) ([]AuditLog, error)
 	ListExpensesByUserID(ctx context.Context, arg ListExpensesByUserIDParams) ([]Expense, error)
 	ListPaymentEventsByOrderID(ctx context.Context, paypalOrderID string) ([]PaymentEvent, error)
+	// Lists all payment records associated with a purchase for the authenticated user
+	ListPaymentsByPurchaseID(ctx context.Context, arg ListPaymentsByPurchaseIDParams) ([]Payment, error)
 	ListPaymentsByUserID(ctx context.Context, arg ListPaymentsByUserIDParams) ([]Payment, error)
 	ListPurchasesByUserID(ctx context.Context, arg ListPurchasesByUserIDParams) ([]Purchase, error)
 	ListSupportDraftsByUserID(ctx context.Context, arg ListSupportDraftsByUserIDParams) ([]SupportDraft, error)
 	ListUsers(ctx context.Context) ([]User, error)
 	UpdatePaymentEventStatus(ctx context.Context, arg UpdatePaymentEventStatusParams) (PaymentEvent, error)
+	// Internal/system query
 	UpdatePaymentStatus(ctx context.Context, arg UpdatePaymentStatusParams) (Payment, error)
+	// Trusted query for idempotent PayPal webhook updates
 	UpdatePaymentStatusByPayPalOrderID(ctx context.Context, arg UpdatePaymentStatusByPayPalOrderIDParams) (Payment, error)
+	// User-facing payment status update (prevents IDOR: requires authenticated user_id)
+	UpdatePaymentStatusForUser(ctx context.Context, arg UpdatePaymentStatusForUserParams) (Payment, error)
+	// Internal/system query (e.g. PayPal webhook or admin reconciliation)
 	UpdatePurchaseStatus(ctx context.Context, arg UpdatePurchaseStatusParams) (Purchase, error)
+	// User-facing status update (prevents IDOR: requires authenticated user_id)
+	UpdatePurchaseStatusForUser(ctx context.Context, arg UpdatePurchaseStatusForUserParams) (Purchase, error)
+	// Internal/system query
 	UpdateSupportDraft(ctx context.Context, arg UpdateSupportDraftParams) (SupportDraft, error)
+	// User-facing draft update (prevents IDOR: requires authenticated user_id)
+	UpdateSupportDraftForUser(ctx context.Context, arg UpdateSupportDraftForUserParams) (SupportDraft, error)
 	UpdateUserSpendingLimit(ctx context.Context, arg UpdateUserSpendingLimitParams) (User, error)
+	UpdateUserSpendingLimitBySupabaseUID(ctx context.Context, arg UpdateUserSpendingLimitBySupabaseUIDParams) (User, error)
+	// Idempotent provisioning operation that handles repeated attempts using the unique constraint.
+	UpsertUserWithSupabaseUID(ctx context.Context, arg UpsertUserWithSupabaseUIDParams) (User, error)
 }
 
 var _ Querier = (*Queries)(nil)

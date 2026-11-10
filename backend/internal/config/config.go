@@ -2,6 +2,8 @@ package config
 
 import (
 	"bufio"
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 )
@@ -12,6 +14,15 @@ type Config struct {
 	DatabaseURL        string
 	Environment        string
 	CORSAllowedOrigins string
+	SupabaseURL        string
+	SupabaseJWTSecret  string
+	SupabaseJWKSURL    string
+	SupabaseAuthMode   string // "jwks", "hmac", or "" (auto-detect if unambiguous)
+	PayPalClientID     string
+	PayPalClientSecret string
+	PayPalBaseURL      string
+	PayPalMode         string // "sandbox"
+	PayPalWebhookID    string
 }
 
 // LoadConfig reads configuration from .env and the environment with robust defaults.
@@ -38,12 +49,62 @@ func LoadConfig() *Config {
 		corsOrigins = "*"
 	}
 
+	supabaseURL := os.Getenv("SUPABASE_URL")
+	supabaseJWTSecret := os.Getenv("SUPABASE_JWT_SECRET")
+	supabaseJWKSURL := os.Getenv("SUPABASE_JWKS_URL")
+	supabaseAuthMode := os.Getenv("SUPABASE_AUTH_MODE")
+	if supabaseJWKSURL == "" && supabaseURL != "" {
+		supabaseJWKSURL = strings.TrimRight(supabaseURL, "/") + "/auth/v1/.well-known/jwks.json"
+	}
+
+	paypalClientID := os.Getenv("PAYPAL_CLIENT_ID")
+	paypalClientSecret := os.Getenv("PAYPAL_CLIENT_SECRET")
+	paypalBaseURL := os.Getenv("PAYPAL_BASE_URL")
+	paypalMode := os.Getenv("PAYPAL_MODE")
+	if paypalMode == "" {
+		paypalMode = "sandbox"
+	}
+	if paypalBaseURL == "" {
+		if strings.ToLower(paypalMode) == "sandbox" {
+			paypalBaseURL = "https://api-m.sandbox.paypal.com"
+		} else {
+			paypalBaseURL = "https://api-m.paypal.com"
+		}
+	}
+	paypalWebhookID := os.Getenv("PAYPAL_WEBHOOK_ID")
+
 	return &Config{
 		Port:               port,
 		DatabaseURL:        dbURL,
 		Environment:        env,
 		CORSAllowedOrigins: corsOrigins,
+		SupabaseURL:        supabaseURL,
+		SupabaseJWTSecret:  supabaseJWTSecret,
+		SupabaseJWKSURL:    supabaseJWKSURL,
+		SupabaseAuthMode:   supabaseAuthMode,
+		PayPalClientID:     paypalClientID,
+		PayPalClientSecret: paypalClientSecret,
+		PayPalBaseURL:      paypalBaseURL,
+		PayPalMode:         paypalMode,
+		PayPalWebhookID:    paypalWebhookID,
 	}
+}
+
+// ValidatePayPal validates that PayPal sandbox credentials and configuration are properly set.
+func (c *Config) ValidatePayPal() error {
+	if strings.ToLower(c.PayPalMode) != "sandbox" {
+		return fmt.Errorf("only sandbox mode is supported in this phase, got: %s", c.PayPalMode)
+	}
+	if c.PayPalClientID == "" {
+		return errors.New("PAYPAL_CLIENT_ID is required")
+	}
+	if c.PayPalClientSecret == "" {
+		return errors.New("PAYPAL_CLIENT_SECRET is required")
+	}
+	if !strings.HasPrefix(c.PayPalBaseURL, "https://") {
+		return errors.New("PAYPAL_BASE_URL must use HTTPS protocol")
+	}
+	return nil
 }
 
 // loadDotEnv parses a simple KEY=VALUE file and sets environment variables if not already set.

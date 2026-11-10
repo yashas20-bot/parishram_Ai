@@ -63,8 +63,37 @@ SELECT id, user_id, payment_id, request_type, subject, draft_body, status, creat
 WHERE id = $1 LIMIT 1
 `
 
+// Internal/system query
 func (q *Queries) GetSupportDraftByID(ctx context.Context, id int64) (SupportDraft, error) {
 	row := q.db.QueryRow(ctx, getSupportDraftByID, id)
+	var i SupportDraft
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.PaymentID,
+		&i.RequestType,
+		&i.Subject,
+		&i.DraftBody,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getSupportDraftByIDAndUser = `-- name: GetSupportDraftByIDAndUser :one
+SELECT id, user_id, payment_id, request_type, subject, draft_body, status, created_at, updated_at FROM support_drafts
+WHERE id = $1 AND user_id = $2 LIMIT 1
+`
+
+type GetSupportDraftByIDAndUserParams struct {
+	ID     int64 `json:"id"`
+	UserID int64 `json:"user_id"`
+}
+
+// User-facing scoped read query (prevents IDOR)
+func (q *Queries) GetSupportDraftByIDAndUser(ctx context.Context, arg GetSupportDraftByIDAndUserParams) (SupportDraft, error) {
+	row := q.db.QueryRow(ctx, getSupportDraftByIDAndUser, arg.ID, arg.UserID)
 	var i SupportDraft
 	err := row.Scan(
 		&i.ID,
@@ -140,12 +169,55 @@ type UpdateSupportDraftParams struct {
 	Status    string `json:"status"`
 }
 
+// Internal/system query
 func (q *Queries) UpdateSupportDraft(ctx context.Context, arg UpdateSupportDraftParams) (SupportDraft, error) {
 	row := q.db.QueryRow(ctx, updateSupportDraft,
 		arg.ID,
 		arg.Subject,
 		arg.DraftBody,
 		arg.Status,
+	)
+	var i SupportDraft
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.PaymentID,
+		&i.RequestType,
+		&i.Subject,
+		&i.DraftBody,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateSupportDraftForUser = `-- name: UpdateSupportDraftForUser :one
+UPDATE support_drafts
+SET subject = $2,
+    draft_body = $3,
+    status = $4,
+    updated_at = CURRENT_TIMESTAMP
+WHERE id = $1 AND user_id = $5
+RETURNING id, user_id, payment_id, request_type, subject, draft_body, status, created_at, updated_at
+`
+
+type UpdateSupportDraftForUserParams struct {
+	ID        int64  `json:"id"`
+	Subject   string `json:"subject"`
+	DraftBody string `json:"draft_body"`
+	Status    string `json:"status"`
+	UserID    int64  `json:"user_id"`
+}
+
+// User-facing draft update (prevents IDOR: requires authenticated user_id)
+func (q *Queries) UpdateSupportDraftForUser(ctx context.Context, arg UpdateSupportDraftForUserParams) (SupportDraft, error) {
+	row := q.db.QueryRow(ctx, updateSupportDraftForUser,
+		arg.ID,
+		arg.Subject,
+		arg.DraftBody,
+		arg.Status,
+		arg.UserID,
 	)
 	var i SupportDraft
 	err := row.Scan(

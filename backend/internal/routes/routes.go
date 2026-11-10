@@ -8,7 +8,17 @@ import (
 )
 
 // SetupRouter initializes Gin engine with middlewares and registered routes.
-func SetupRouter(healthController *controllers.HealthController, allowedOrigins string) *gin.Engine {
+// The public health endpoints remain accessible without credentials,
+// while all v1 business API routes require a valid Supabase JWT via authMiddleware.
+func SetupRouter(
+	healthController *controllers.HealthController,
+	budgetController *controllers.BudgetController,
+	expenseController *controllers.ExpenseController,
+	purchaseController *controllers.PurchaseController,
+	paymentController *controllers.PaymentController,
+	allowedOrigins string,
+	authMiddleware gin.HandlerFunc,
+) *gin.Engine {
 	r := gin.New()
 
 	// Standard middlewares
@@ -30,14 +40,40 @@ func SetupRouter(healthController *controllers.HealthController, allowedOrigins 
 		c.Next()
 	})
 
-	// Health routes
+	// Public health routes for load balancers and deployment monitoring
 	r.GET("/health", healthController.HealthCheck)
 
 	// API v1 grouping
 	v1 := r.Group("/api/v1")
 	{
+		// Public health endpoint within v1
 		v1.GET("/health", healthController.HealthCheck)
-		// Future feature endpoints will be registered here (purchases, payments, budgets, recovery, drafts)
+
+		// Protected v1 business routes requiring valid Supabase JWT
+		protected := v1.Group("")
+		if authMiddleware != nil {
+			protected.Use(authMiddleware)
+		}
+		{
+			if budgetController != nil {
+				protected.GET("/budgets/me", budgetController.GetBudget)
+				protected.PUT("/budgets/me", budgetController.UpdateBudget)
+			}
+			if expenseController != nil {
+				protected.POST("/expenses", expenseController.CreateExpense)
+				protected.GET("/expenses", expenseController.ListExpenses)
+				protected.GET("/expenses/:id", expenseController.GetExpense)
+				protected.DELETE("/expenses/:id", expenseController.DeleteExpense)
+			}
+			if purchaseController != nil {
+				protected.POST("/purchases/evaluate", purchaseController.EvaluatePurchase)
+				protected.GET("/purchases", purchaseController.ListPurchases)
+				protected.GET("/purchases/:id", purchaseController.GetPurchase)
+			}
+			if paymentController != nil {
+				protected.POST("/payments/create-order", paymentController.CreateOrder)
+			}
+		}
 	}
 
 	return r

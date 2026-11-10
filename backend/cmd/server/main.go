@@ -15,6 +15,8 @@ import (
 	"parishram-ai/backend/internal/config"
 	"parishram-ai/backend/internal/controllers"
 	db "parishram-ai/backend/internal/db/sqlc"
+	"parishram-ai/backend/internal/middleware"
+	"parishram-ai/backend/internal/paypal"
 	"parishram-ai/backend/internal/routes"
 )
 
@@ -52,9 +54,34 @@ func main() {
 
 	// Initialize controllers with SQLC Querier and dbPool
 	healthController := controllers.NewHealthController(querier, pool)
+	budgetController := controllers.NewBudgetController(querier)
+	expenseController := controllers.NewExpenseController(querier)
+	purchaseController := controllers.NewPurchaseController(querier)
+
+	var paymentController *controllers.PaymentController
+	if querier != nil {
+		if err := cfg.ValidatePayPal(); err != nil {
+			log.Printf("[WARN] PayPal configuration incomplete or invalid: %v. PayPal payment routes disabled.", err)
+		} else {
+			paypalClient := paypal.NewClient(cfg.PayPalBaseURL, cfg.PayPalClientID, cfg.PayPalClientSecret, 15*time.Second)
+			paymentController = controllers.NewPaymentController(querier, paypalClient)
+			log.Printf("[INFO] PayPal Sandbox client initialized (mode: %s, base_url: %s)", cfg.PayPalMode, cfg.PayPalBaseURL)
+		}
+	}
+
+	// Initialize authentication validator and middleware
+	var authMiddleware gin.HandlerFunc
+	if querier != nil {
+		if validator, err := middleware.NewTokenValidatorFromConfig(cfg); err != nil {
+			log.Printf("[WARN] Supabase JWT validator not configured: %v", err)
+		} else {
+			authMiddleware = middleware.RequireAuth(validator, querier)
+			log.Printf("[INFO] Supabase JWT authentication middleware enabled (algorithms: %v)", validator.SupportedAlgorithms())
+		}
+	}
 
 	// Setup routes
-	router := routes.SetupRouter(healthController, cfg.CORSAllowedOrigins)
+	router := routes.SetupRouter(healthController, budgetController, expenseController, purchaseController, paymentController, cfg.CORSAllowedOrigins, authMiddleware)
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,

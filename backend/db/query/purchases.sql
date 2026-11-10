@@ -15,18 +15,29 @@ INSERT INTO purchases (
 RETURNING *;
 
 -- name: GetPurchaseByID :one
+-- Internal/system query (e.g. backend reconciliation or payment linkage)
 SELECT * FROM purchases
 WHERE id = $1 LIMIT 1;
 
 -- name: GetPurchaseByIDAndUser :one
+-- User-facing scoped read query (prevents IDOR)
 SELECT * FROM purchases
 WHERE id = $1 AND user_id = $2 LIMIT 1;
 
 -- name: UpdatePurchaseStatus :one
+-- Internal/system query (e.g. PayPal webhook or admin reconciliation)
 UPDATE purchases
 SET status = $2,
     updated_at = CURRENT_TIMESTAMP
 WHERE id = $1
+RETURNING *;
+
+-- name: UpdatePurchaseStatusForUser :one
+-- User-facing status update (prevents IDOR: requires authenticated user_id)
+UPDATE purchases
+SET status = $2,
+    updated_at = CURRENT_TIMESTAMP
+WHERE id = $1 AND user_id = $3
 RETURNING *;
 
 -- name: ListPurchasesByUserID :many

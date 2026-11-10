@@ -1,4 +1,4 @@
-package controllers_test
+package controllers
 
 import (
 	"encoding/json"
@@ -7,13 +7,12 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	"parishram-ai/backend/internal/controllers"
 )
 
 func TestHealthCheck_NoPool(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	controller := controllers.NewHealthController(nil, nil)
+	controller := NewHealthController(nil, nil)
 
 	w := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(w)

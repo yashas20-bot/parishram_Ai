@@ -57,6 +57,49 @@ func (q *Queries) CreateExpense(ctx context.Context, arg CreateExpenseParams) (E
 	return i, err
 }
 
+const deleteExpenseForUser = `-- name: DeleteExpenseForUser :exec
+DELETE FROM expenses
+WHERE id = $1 AND user_id = $2
+`
+
+type DeleteExpenseForUserParams struct {
+	ID     int64 `json:"id"`
+	UserID int64 `json:"user_id"`
+}
+
+// User-facing scoped deletion (prevents IDOR)
+func (q *Queries) DeleteExpenseForUser(ctx context.Context, arg DeleteExpenseForUserParams) error {
+	_, err := q.db.Exec(ctx, deleteExpenseForUser, arg.ID, arg.UserID)
+	return err
+}
+
+const getExpenseByIDAndUser = `-- name: GetExpenseByIDAndUser :one
+SELECT id, user_id, category, amount, currency, description, spent_at, created_at FROM expenses
+WHERE id = $1 AND user_id = $2 LIMIT 1
+`
+
+type GetExpenseByIDAndUserParams struct {
+	ID     int64 `json:"id"`
+	UserID int64 `json:"user_id"`
+}
+
+// User-facing scoped read query (prevents IDOR)
+func (q *Queries) GetExpenseByIDAndUser(ctx context.Context, arg GetExpenseByIDAndUserParams) (Expense, error) {
+	row := q.db.QueryRow(ctx, getExpenseByIDAndUser, arg.ID, arg.UserID)
+	var i Expense
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Category,
+		&i.Amount,
+		&i.Currency,
+		&i.Description,
+		&i.SpentAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getExpensesByCategory = `-- name: GetExpensesByCategory :many
 SELECT category, COALESCE(SUM(amount), 0)::BIGINT AS total_amount, COUNT(*)::BIGINT AS count
 FROM expenses
@@ -88,6 +131,85 @@ func (q *Queries) GetExpensesByCategory(ctx context.Context, arg GetExpensesByCa
 	items := []GetExpensesByCategoryRow{}
 	for rows.Next() {
 		var i GetExpensesByCategoryRow
+		if err := rows.Scan(&i.Category, &i.TotalAmount, &i.Count); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getMonthlyExpenseTotalForUser = `-- name: GetMonthlyExpenseTotalForUser :one
+SELECT COALESCE(SUM(amount), 0)::BIGINT AS total_amount
+FROM expenses
+WHERE user_id = $1
+  AND currency = $2
+  AND spent_at >= $3
+  AND spent_at < $4
+`
+
+type GetMonthlyExpenseTotalForUserParams struct {
+	UserID    int64              `json:"user_id"`
+	Currency  string             `json:"currency"`
+	SpentAt   pgtype.Timestamptz `json:"spent_at"`
+	SpentAt_2 pgtype.Timestamptz `json:"spent_at_2"`
+}
+
+// Calculates the authenticated user's confirmed expense total for a monthly period.
+// Uses start-inclusive, end-exclusive interval [start, end) and filters by currency to prevent mixing currencies.
+func (q *Queries) GetMonthlyExpenseTotalForUser(ctx context.Context, arg GetMonthlyExpenseTotalForUserParams) (int64, error) {
+	row := q.db.QueryRow(ctx, getMonthlyExpenseTotalForUser,
+		arg.UserID,
+		arg.Currency,
+		arg.SpentAt,
+		arg.SpentAt_2,
+	)
+	var total_amount int64
+	err := row.Scan(&total_amount)
+	return total_amount, err
+}
+
+const getMonthlyExpensesByCategory = `-- name: GetMonthlyExpensesByCategory :many
+SELECT category, COALESCE(SUM(amount), 0)::BIGINT AS total_amount, COUNT(*)::BIGINT AS count
+FROM expenses
+WHERE user_id = $1
+  AND currency = $2
+  AND spent_at >= $3
+  AND spent_at < $4
+GROUP BY category
+ORDER BY total_amount DESC
+`
+
+type GetMonthlyExpensesByCategoryParams struct {
+	UserID    int64              `json:"user_id"`
+	Currency  string             `json:"currency"`
+	SpentAt   pgtype.Timestamptz `json:"spent_at"`
+	SpentAt_2 pgtype.Timestamptz `json:"spent_at_2"`
+}
+
+type GetMonthlyExpensesByCategoryRow struct {
+	Category    string `json:"category"`
+	TotalAmount int64  `json:"total_amount"`
+	Count       int64  `json:"count"`
+}
+
+func (q *Queries) GetMonthlyExpensesByCategory(ctx context.Context, arg GetMonthlyExpensesByCategoryParams) ([]GetMonthlyExpensesByCategoryRow, error) {
+	rows, err := q.db.Query(ctx, getMonthlyExpensesByCategory,
+		arg.UserID,
+		arg.Currency,
+		arg.SpentAt,
+		arg.SpentAt_2,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetMonthlyExpensesByCategoryRow{}
+	for rows.Next() {
+		var i GetMonthlyExpensesByCategoryRow
 		if err := rows.Scan(&i.Category, &i.TotalAmount, &i.Count); err != nil {
 			return nil, err
 		}
